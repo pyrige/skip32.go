@@ -16,6 +16,8 @@
 
 package skip32
 
+import "fmt"
+
 // A skip32 encryption key must be at least MIN_KEY_LEN bytes in length
 const MIN_KEY_LEN = 10
 
@@ -44,40 +46,34 @@ var ftable = [256]byte{
 	0x08, 0x77, 0x11, 0xbe, 0x92, 0x4f, 0x24, 0xc5, 0x32, 0x36, 0x9d, 0xcf, 0xf3, 0xa6, 0xbb, 0xac,
 	0x5e, 0x6c, 0xa9, 0x13, 0x57, 0x25, 0xb5, 0xe3, 0xbd, 0xa8, 0x3a, 0x01, 0x05, 0x59, 0x2a, 0x46}
 
-func g(key []byte, k int, w uint16) uint16 {
-	var g1, g2, g3, g4, g5, g6 byte
+func g(key []byte, k uint16, w uint16) uint16 {
+	g1 := byte(w >> 8)
+	g2 := byte(w)
 
-	g1 = byte(w >> 8)
-	g2 = byte(w)
+	g3 := ftable[g2^key[(4*k+0)%10]] ^ g1
+	g4 := ftable[g3^key[(4*k+1)%10]] ^ g2
+	g5 := ftable[g4^key[(4*k+2)%10]] ^ g3
+	g6 := ftable[g5^key[(4*k+3)%10]] ^ g4
 
-	g3 = ftable[g2^key[(4*k+0)%10]] ^ g1
-	g4 = ftable[g3^key[(4*k+1)%10]] ^ g2
-	g5 = ftable[g4^key[(4*k+2)%10]] ^ g3
-	g6 = ftable[g5^key[(4*k+3)%10]] ^ g4
-
-	return uint16(g5)<<8 + uint16(g6)
+	return uint16(g5)<<8 + uint16(g6) ^ k
 }
 
 func skip32(key []byte, buf []byte, dir direction) {
-	var k, kstep int
-	var wl, wr uint16
-
-	// sort out direction
-	if dir == encrypt {
-		kstep, k = 1, 0
-	} else {
-		kstep, k = -1, 23
+	var steps = map[direction]struct{ k, s int }{
+		encrypt: {0, 1},
+		decrypt: {23, -1},
 	}
 
 	// pack into words
-	wl = uint16(buf[0])<<8 + uint16(buf[1])
-	wr = uint16(buf[2])<<8 + uint16(buf[3])
+	wl := uint16(buf[0])<<8 + uint16(buf[1])
+	wr := uint16(buf[2])<<8 + uint16(buf[3])
 
-	for i := 0; i < 24/2; i++ {
-		wr ^= g(key, k, wl) ^ uint16(k)
-		k += kstep
-		wl ^= g(key, k, wr) ^ uint16(k)
-		k += kstep
+	var step = steps[dir]
+	for i := 0; i < 12; i++ {
+		wr ^= g(key, uint16(step.k), wl)
+		step.k += step.s
+		wl ^= g(key, uint16(step.k), wr)
+		step.k += step.s
 	}
 
 	// implicitly swap halves while unpacking
@@ -116,16 +112,16 @@ func (e ErrKeyTooShort) Error() string {
 		int(e), MIN_KEY_LEN)
 }
 
-func process(key []byte, val uint32, dir direction) (uint32, error) {
+func process(key []byte, val uint32, dir direction) (res uint32, err error) {
 	if len(key) < MIN_KEY_LEN {
-		return val, ErrKeyTooShort(len(key))
+		err = ErrKeyTooShort(len(key))
+		return
 	}
 
 	raw := val_to_raw(val)
 	skip32(key, raw, dir)
-	val = raw_to_val(raw)
-
-	return val, nil
+	res = raw_to_val(raw)
+	return
 }
 
 /* Decrypt an unsigned 32-bit value with the given key.
