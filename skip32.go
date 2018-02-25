@@ -17,6 +17,7 @@
 package skip32
 
 import "fmt"
+import "encoding/binary"
 
 // A skip32 encryption key must be at least MIN_KEY_LEN bytes in length
 const MIN_KEY_LEN = 10
@@ -58,15 +59,18 @@ func g(key []byte, k uint16, w uint16) uint16 {
 	return uint16(g5)<<8 + uint16(g6) ^ k
 }
 
-func skip32(key []byte, buf []byte, dir direction) {
+func skip32(key []byte, val uint32, dir direction) (res uint32) {
 	var steps = map[direction]struct{ k, s int }{
 		encrypt: {0, 1},
 		decrypt: {23, -1},
 	}
 
+	var raw [4]byte
+	binary.LittleEndian.PutUint32(raw[:], val)
+
 	// pack into words
-	wl := uint16(buf[0])<<8 + uint16(buf[1])
-	wr := uint16(buf[2])<<8 + uint16(buf[3])
+	wl := binary.BigEndian.Uint16(raw[0:])
+	wr := binary.BigEndian.Uint16(raw[2:])
 
 	var step = steps[dir]
 	for i := 0; i < 12; i++ {
@@ -76,29 +80,11 @@ func skip32(key []byte, buf []byte, dir direction) {
 		step.k += step.s
 	}
 
-	// implicitly swap halves while unpacking
-	buf[0] = byte(wr >> 8)
-	buf[1] = byte(wr >> 0)
-	buf[2] = byte(wl >> 8)
-	buf[3] = byte(wl >> 0)
-}
+	// swap halves while unpacking
+	binary.BigEndian.PutUint16(raw[0:], wr)
+	binary.BigEndian.PutUint16(raw[2:], wl)
 
-func val_to_raw(val uint32) []byte {
-	var raw [4]byte
-
-	raw[0] = byte(val >> 0)
-	raw[1] = byte(val >> 8)
-	raw[2] = byte(val >> 16)
-	raw[3] = byte(val >> 24)
-
-	return raw[:]
-}
-
-func raw_to_val(raw []byte) (val uint32) {
-	val |= uint32(raw[0])
-	val |= uint32(raw[1]) << 8
-	val |= uint32(raw[2]) << 16
-	val |= uint32(raw[3]) << 24
+	res = binary.LittleEndian.Uint32(raw[:])
 	return
 }
 
@@ -118,22 +104,20 @@ func process(key []byte, val uint32, dir direction) (res uint32, err error) {
 		return
 	}
 
-	raw := val_to_raw(val)
-	skip32(key, raw, dir)
-	res = raw_to_val(raw)
+	res = skip32(key, val, dir)
 	return
 }
 
 /* Decrypt an unsigned 32-bit value with the given key.
  * The key MUST be at least MIN_KEY_LEN bytes in length, longer keys are truncated.
  */
-func Encrypt(key []byte, value uint32) (uint32, error) {
-	return process(key, value, encrypt)
+func Encrypt(key []byte, val uint32) (uint32, error) {
+	return process(key, val, encrypt)
 }
 
 /* Decrypt an unsigned 32-bit value with the given key.
  * The key MUST be at least MIN_KEY_LEN bytes in length, longer keys are truncated.
  */
-func Decrypt(key []byte, value uint32) (uint32, error) {
-	return process(key, value, decrypt)
+func Decrypt(key []byte, val uint32) (uint32, error) {
+	return process(key, val, decrypt)
 }
